@@ -1,8 +1,21 @@
 import { codeFrameColumns } from "@babel/code-frame";
-import generate from "@babel/generator";
+import generatorModule from "@babel/generator";
 import { parse } from "@babel/parser";
-import traverse, { type NodePath } from "@babel/traverse";
+import traverseModule, { type NodePath } from "@babel/traverse";
 import * as t from "@babel/types";
+
+// Babel 7 publishes these packages as CommonJS. Native ESM exposes their
+// callable default as `.default.default`, while transpilers often flatten it.
+// Normalize both shapes because this code executes from the published bundle.
+const traverse: typeof traverseModule =
+  typeof traverseModule === "function"
+    ? traverseModule
+    : (traverseModule as unknown as { default: typeof traverseModule }).default;
+const generate: typeof generatorModule =
+  typeof generatorModule === "function"
+    ? generatorModule
+    : (generatorModule as unknown as { default: typeof generatorModule })
+        .default;
 
 export interface SourceAwareComponentMetadata {
   moduleId: string;

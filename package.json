@@ -21,11 +21,12 @@
   ],
   "scripts": {
     "build": "tsup",
-    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build",
+    "check": "pnpm typecheck && pnpm lint && pnpm format:check && pnpm test && pnpm build && pnpm test:dist",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "test": "vitest run",
+    "test:dist": "node tests/distribution-smoke.mjs",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {
