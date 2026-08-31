@@ -26,7 +26,7 @@ describe("Vite integration", () => {
       `
         import type { WithFileName } from 'ts-source-reflection';
         type Props = WithFileName<{}>;
-        export const Provider = ({ sourceFileName }: Props) => sourceFileName;
+        export const Provider = ({ _inj_sourceFileName }: Props) => _inj_sourceFileName;
       `,
     );
     await fs.writeFile(

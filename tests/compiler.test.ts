@@ -104,7 +104,7 @@ describe("consumer transformation", () => {
       export const View = () => <><Local><Local /></Local></>;
     `);
     expect(
-      result?.code.match(/sourceFileName="RepositoryPage\.test"/g),
+      result?.code.match(/_inj_sourceFileName="RepositoryPage\.test"/g),
     ).toHaveLength(2);
     expect(result?.map?.sources).toContain(
       "/src/pages/RepositoryPage.test.tsx?import",
@@ -114,7 +114,7 @@ describe("consumer transformation", () => {
   it("preserves an explicit property", () => {
     const result = transform(`
       import { Provider as Local } from './Provider';
-      export const View = () => <Local sourceFileName="logical-name" />;
+      export const View = () => <Local _inj_sourceFileName="logical-name" />;
     `);
     expect(result).toBeNull();
   });
@@ -122,10 +122,10 @@ describe("consumer transformation", () => {
   it("errors on explicit properties when configured", () => {
     expect(() =>
       transform(
-        `import { Provider as Local } from './Provider'; <Local sourceFileName="x" />;`,
+        `import { Provider as Local } from './Provider'; <Local _inj_sourceFileName="x" />;`,
         "error",
       ),
-    ).toThrow(/Explicit sourceFileName/);
+    ).toThrow(/Explicit _inj_sourceFileName/);
   });
 
   it("rejects spreads and unsupported value references", () => {

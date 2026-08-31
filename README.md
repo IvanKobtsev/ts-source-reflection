@@ -25,8 +25,8 @@ import type { WithFileName } from "ts-source-reflection";
 
 type ProviderProps = WithFileName<{ children: React.ReactNode }>;
 
-export const Provider = ({ children, sourceFileName }: ProviderProps) => (
-  <section data-source={sourceFileName}>{children}</section>
+export const Provider = ({ children, _inj_sourceFileName }: ProviderProps) => (
+  <section data-source={_inj_sourceFileName}>{children}</section>
 );
 ```
 
@@ -36,7 +36,7 @@ Normal callers remain clean:
 import { Provider } from "./Provider";
 
 export const RepositoryPage = () => <Provider>content</Provider>;
-// Compiles as: <Provider sourceFileName="RepositoryPage">content</Provider>
+// Compiles as: <Provider _inj_sourceFileName="RepositoryPage">content</Provider>
 ```
 
 The prop is intentionally optional in TypeScript. The plugin guarantees it for
@@ -53,7 +53,7 @@ sourceAwareProps({
 });
 ```
 
-An explicitly written `sourceFileName` wins by default. JSX spreads on marked
+An explicitly written `_inj_sourceFileName` wins by default. JSX spreads on marked
 components are rejected because their precedence cannot be determined safely.
 
 ## MVP boundaries

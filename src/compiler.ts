@@ -7,7 +7,9 @@ import * as t from "@babel/types";
 export interface SourceAwareComponentMetadata {
   moduleId: string;
   exportName: string;
-  injections: [{ property: "sourceFileName"; source: "importer-file-name" }];
+  injections: [
+    { property: "_inj_sourceFileName"; source: "importer-file-name" },
+  ];
 }
 
 export interface ImportedComponent {
@@ -160,7 +162,7 @@ export function discoverComponents(
       moduleId: id,
       exportName: name,
       injections: [
-        { property: "sourceFileName", source: "importer-file-name" },
+        { property: "_inj_sourceFileName", source: "importer-file-name" },
       ],
     });
   };
@@ -258,7 +260,7 @@ export function transformConsumer(options: {
             [
               `Component: ${component.localName} (export ${component.exportName})`,
               `Provider: ${component.providerModuleId}`,
-              "Property: sourceFileName",
+              "Property: _inj_sourceFileName",
             ],
           );
         }
@@ -280,7 +282,7 @@ export function transformConsumer(options: {
           [
             `Component: ${component.localName} (export ${component.exportName})`,
             `Provider: ${component.providerModuleId}`,
-            "Property: sourceFileName",
+            "Property: _inj_sourceFileName",
           ],
         );
       }
@@ -288,19 +290,19 @@ export function transformConsumer(options: {
         (attribute) =>
           t.isJSXAttribute(attribute) &&
           t.isJSXIdentifier(attribute.name) &&
-          attribute.name.name === "sourceFileName",
+          attribute.name.name === "_inj_sourceFileName",
       );
       if (explicit) {
         if (explicitProperty === "error") {
           throw new SourceAwareCompilerError(
-            "Explicit sourceFileName is forbidden by plugin configuration",
+            "Explicit _inj_sourceFileName is forbidden by plugin configuration",
             code,
             id,
             explicit,
             [
               `Component: ${component.localName} (export ${component.exportName})`,
               `Provider: ${component.providerModuleId}`,
-              "Property: sourceFileName",
+              "Property: _inj_sourceFileName",
             ],
           );
         }
@@ -308,7 +310,7 @@ export function transformConsumer(options: {
       }
       path.node.attributes.push(
         t.jsxAttribute(
-          t.jsxIdentifier("sourceFileName"),
+          t.jsxIdentifier("_inj_sourceFileName"),
           t.stringLiteral(fileName),
         ),
       );
