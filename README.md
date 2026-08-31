@@ -53,6 +53,10 @@ sourceAwareProps({
 });
 ```
 
+`include` and `exclude` apply consistently to provider discovery, consumer
+transformation, and development-mode invalidation. Patterns are resolved from
+the Vite project root.
+
 An explicitly written `_inj_sourceFileName` wins by default. JSX spreads on marked
 components are rejected because their precedence cannot be determined safely.
 

@@ -5,7 +5,7 @@ import {
   SourceAwareCompilerError,
   transformConsumer,
 } from "../src/compiler";
-import { deriveConsumerFileName } from "../src/plugin";
+import { createSourceFilter, deriveConsumerFileName } from "../src/plugin";
 
 const provider = "/src/Provider.tsx";
 
@@ -54,7 +54,7 @@ describe("component discovery", () => {
 describe("named import parsing", () => {
   it("follows aliases and ignores type-only specifiers", () => {
     const imports = findNamedImports(
-      `import { Provider as Local, type Props } from './Provider';`,
+      `import { Provider as Local, type Props } from './Provider'; <Local />;`,
       "/src/View.tsx",
     );
     expect(imports).toEqual([
@@ -63,6 +63,17 @@ describe("named import parsing", () => {
         specifiers: [{ exportName: "Provider", localName: "Local" }],
       },
     ]);
+  });
+
+  it("ignores regular imports that are used exclusively as types", () => {
+    const imports = findNamedImports(
+      `
+        import { WithFileName } from 'ts-source-reflection';
+        type Props = WithFileName<{ value: string }>;
+      `,
+      "/src/Provider.tsx",
+    );
+    expect(imports).toEqual([]);
   });
 });
 
@@ -75,6 +86,25 @@ describe("consumer filenames", () => {
     ["/src/extensionless", null],
   ])("derives %s as %s", (id, expected) => {
     expect(deriveConsumerFileName(id)).toBe(expected);
+  });
+});
+
+describe("source filtering", () => {
+  it("applies user exclusions to absolute transform IDs", () => {
+    const filter = createSourceFilter("C:/repo/frontend", {
+      exclude: ["**/services/api/api-client.types.ts"],
+    });
+    expect(filter("C:/repo/frontend/src/pages/View.tsx")).toBe(true);
+    expect(
+      filter("C:/repo/frontend/src/services/api/api-client.types.ts"),
+    ).toBe(false);
+  });
+
+  it("applies custom includes and default exclusions consistently", () => {
+    const filter = createSourceFilter("C:/repo", { include: ["src/**/*.tsx"] });
+    expect(filter("C:/repo/src/View.tsx")).toBe(true);
+    expect(filter("C:/repo/src/types.ts")).toBe(false);
+    expect(filter("C:/repo/src/generated.d.ts")).toBe(false);
   });
 });
 

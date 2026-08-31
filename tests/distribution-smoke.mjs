@@ -12,7 +12,7 @@ try {
   await fs.writeFile(
     path.join(root, "Provider.tsx"),
     `
-      import type { WithFileName } from 'ts-source-reflection';
+      import { WithFileName } from 'ts-source-reflection';
       type Props = WithFileName<{}>;
       export const Provider = ({ _inj_sourceFileName }: Props) => _inj_sourceFileName;
     `,

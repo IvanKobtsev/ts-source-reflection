@@ -207,23 +207,38 @@ export function discoverComponents(
 export function findNamedImports(code: string, id: string): NamedImport[] {
   const ast = parseModule(code, id);
   const imports: NamedImport[] = [];
-  for (const statement of ast.program.body) {
-    if (!t.isImportDeclaration(statement) || statement.importKind === "type")
-      continue;
-    const specifiers: NamedImport["specifiers"] = [];
-    for (const specifier of statement.specifiers) {
-      if (!t.isImportSpecifier(specifier) || specifier.importKind === "type")
-        continue;
-      specifiers.push({
-        exportName: t.isIdentifier(specifier.imported)
-          ? specifier.imported.name
-          : specifier.imported.value,
-        localName: specifier.local.name,
-      });
-    }
-    if (specifiers.length > 0)
-      imports.push({ source: statement.source.value, specifiers });
-  }
+  traverse(ast, {
+    Program(programPath) {
+      for (const statement of ast.program.body) {
+        if (
+          !t.isImportDeclaration(statement) ||
+          statement.importKind === "type"
+        )
+          continue;
+        const specifiers: NamedImport["specifiers"] = [];
+        for (const specifier of statement.specifiers) {
+          if (
+            !t.isImportSpecifier(specifier) ||
+            specifier.importKind === "type"
+          )
+            continue;
+          const binding = programPath.scope.getBinding(specifier.local.name);
+          const hasRuntimeReference = binding?.referencePaths.some(
+            (reference) => !reference.findParent((parent) => parent.isTSType()),
+          );
+          if (!hasRuntimeReference) continue;
+          specifiers.push({
+            exportName: t.isIdentifier(specifier.imported)
+              ? specifier.imported.name
+              : specifier.imported.value,
+            localName: specifier.local.name,
+          });
+        }
+        if (specifiers.length > 0)
+          imports.push({ source: statement.source.value, specifiers });
+      }
+    },
+  });
   return imports;
 }
 

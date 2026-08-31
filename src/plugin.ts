@@ -2,7 +2,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import fg from "fast-glob";
 import type { HmrContext, ModuleNode, Plugin, ResolvedConfig } from "vite";
-import { normalizePath } from "vite";
+import { createFilter, normalizePath } from "vite";
 import {
   discoverComponents,
   findNamedImports,
@@ -25,6 +25,17 @@ interface ProviderCacheEntry {
 
 const DEFAULT_INCLUDE = ["**/*.ts", "**/*.tsx"];
 const DEFAULT_EXCLUDE = ["**/node_modules/**", "**/dist/**", "**/*.d.ts"];
+
+export function createSourceFilter(
+  root: string,
+  options: Pick<SourceAwarePropsOptions, "include" | "exclude">,
+): (id: string) => boolean {
+  return createFilter(
+    options.include ?? DEFAULT_INCLUDE,
+    [...DEFAULT_EXCLUDE, ...(options.exclude ?? [])],
+    { resolve: root },
+  );
+}
 
 function cleanId(id: string): string {
   return id.split(/[?#]/, 1)[0]!;
@@ -63,6 +74,7 @@ export function sourceAwareProps(
   const consumerProviders = new Map<string, Set<string>>();
   const importResolutionCache = new Map<string, Map<string, string | null>>();
   let config: ResolvedConfig;
+  let isIncluded: (id: string) => boolean = () => true;
 
   const removeConsumerEdges = (consumerId: string) => {
     for (const providerId of consumerProviders.get(consumerId) ?? []) {
@@ -87,7 +99,7 @@ export function sourceAwareProps(
     force = false,
   ): Promise<boolean> => {
     const id = canonicalFileId(file);
-    if (!id) return false;
+    if (!id || !isIncluded(id)) return false;
     let stat;
     try {
       stat = await fs.stat(file);
@@ -127,6 +139,7 @@ export function sourceAwareProps(
     enforce: "pre",
     configResolved(resolved) {
       config = resolved;
+      isIncluded = createSourceFilter(config.root, options);
     },
     async buildStart() {
       const files = await fg(options.include ?? DEFAULT_INCLUDE, {
@@ -144,7 +157,12 @@ export function sourceAwareProps(
     async transform(code, rawId) {
       const id = canonicalFileId(rawId);
       const fileName = deriveConsumerFileName(rawId);
-      if (!id || !fileName || !/\.[cm]?[jt]sx?$/.test(cleanId(rawId)))
+      if (
+        !id ||
+        !isIncluded(id) ||
+        !fileName ||
+        !/\.[cm]?[jt]sx?$/.test(cleanId(rawId))
+      )
         return null;
 
       removeConsumerEdges(id);
@@ -195,7 +213,7 @@ export function sourceAwareProps(
     },
     async handleHotUpdate(ctx) {
       const id = canonicalFileId(ctx.file);
-      if (!id) return;
+      if (!id || !isIncluded(id)) return;
       importResolutionCache.delete(id);
       try {
         const changed = await discoverFile(ctx.file, true);
