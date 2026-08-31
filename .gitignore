@@ -1,0 +1,6 @@
+node_modules/
+.corepack/
+dist/
+coverage/
+*.tsbuildinfo
+.idea/
