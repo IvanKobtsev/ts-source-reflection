@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   analyzeConsumer,
+  createDeterministicUniqueId,
   createInjectionRegistry,
   discoverComponents,
   findNamedImports,
@@ -151,6 +152,41 @@ describe("source values and filtering", () => {
     expect(filter("C:/repo/frontend/src/pages/View.tsx")).toBe(true);
     expect(filter("C:/repo/frontend/src/services/Api.tsx")).toBe(false);
     expect(filter("C:/repo/frontend/src/types.ts")).toBe(false);
+  });
+});
+
+describe("deterministic unique IDs", () => {
+  const context = {
+    consumerFileName: "View",
+    consumerSourcePath: "src/pages/View.tsx",
+    line: 12,
+    column: 4,
+    callKind: "function" as const,
+    parameterIndex: 0,
+  };
+
+  it("is stable, normalized, and formatted as a 128-bit hexadecimal ID", () => {
+    const id = createDeterministicUniqueId(context);
+    expect(id).toMatch(/^inj_[0-9a-f]{32}$/);
+    expect(createDeterministicUniqueId(context)).toBe(id);
+    expect(
+      createDeterministicUniqueId({
+        ...context,
+        consumerSourcePath: "src\\pages\\View.tsx",
+      }),
+    ).toBe(id);
+  });
+
+  it.each([
+    { consumerSourcePath: "src/pages/Other.tsx" },
+    { line: 13 },
+    { column: 5 },
+    { callKind: "jsx" as const },
+    { parameterIndex: 1 },
+  ])("changes for a distinct static identity: %o", (change) => {
+    expect(createDeterministicUniqueId({ ...context, ...change })).not.toBe(
+      createDeterministicUniqueId(context),
+    );
   });
 });
 
@@ -383,5 +419,39 @@ useToast({}).showToast({});`,
         `import { make } from './Provider'; make()["run"]({});`,
       ),
     ).toThrow(/Factory result/);
+  });
+
+  it("injects distinct stable IDs into direct and returned calls", () => {
+    const uniqueRegistry = createInjectionRegistry({
+      injectFileName: false,
+      injectSourceLine: false,
+      injectUniqueId: true,
+    });
+    const providerCode = `import type { InjectUniqueId } from 'ts-source-reflection'; export function make(props: InjectUniqueId<{}>) { return { run: (value: InjectUniqueId<{}>) => value }; }`;
+    const metadata = discoverComponents(
+      providerCode,
+      provider,
+      uniqueRegistry,
+    )[0]!;
+    const parsed = analyzeConsumer(
+      `import { make } from './Provider';\nmake({}).run({});`,
+      "/repo/src/Caller.ts",
+    );
+    const usage: ResolvedExportUsage = {
+      ...parsed.imports[0]!.specifiers[0]!,
+      providerModuleId: provider,
+      metadata,
+    };
+    const result = transformConsumer({
+      parsed,
+      usages: [usage],
+      registry: uniqueRegistry,
+      consumerFileName: "Caller",
+      consumerSourcePath: "src/Caller.ts",
+      explicitProperty: "preserve",
+    });
+    const ids = result?.code.match(/inj_[0-9a-f]{32}/g) ?? [];
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
   });
 });

@@ -19,6 +19,7 @@ export interface SourceAwareInjectionPluginOptions {
   explicitProperty?: "preserve" | "error";
   injectFileName?: boolean;
   injectSourceLine?: boolean;
+  injectUniqueId?: boolean;
 }
 
 interface ProviderCacheEntry {
@@ -87,6 +88,7 @@ export function sourceAwareInjectionPlugin(
   const registry = createInjectionRegistry({
     injectFileName: options.injectFileName ?? false,
     injectSourceLine: options.injectSourceLine ?? false,
+    injectUniqueId: options.injectUniqueId ?? false,
   });
   const hasEnabledInjections = registry.some(({ enabled }) => enabled);
   const metadata = new Map<string, Map<string, SourceAwareExportMetadata>>();

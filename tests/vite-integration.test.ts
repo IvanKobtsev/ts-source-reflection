@@ -24,9 +24,9 @@ describe("Vite integration", () => {
     await fs.writeFile(
       path.join(root, "Provider.tsx"),
       `
-        import { InjectFileName, InjectSourceLine } from 'ts-source-reflection';
-        type Props = InjectFileName<InjectSourceLine<{}>>;
-        export const Provider = ({ _inj_sourceFileName, _inj_sourceLine }: Props) => [_inj_sourceFileName, _inj_sourceLine];
+        import { InjectFileName, InjectSourceLine, InjectUniqueId } from 'ts-source-reflection';
+        type Props = InjectFileName<InjectSourceLine<InjectUniqueId<{}>>>;
+        export const Provider = ({ _inj_sourceFileName, _inj_sourceLine, _inj_uniqueId }: Props) => [_inj_sourceFileName, _inj_sourceLine, _inj_uniqueId];
         export function run(props: InjectSourceLine<{}>) { return props._inj_sourceLine; }
         export function useToast() {
           const showToast = (props: InjectSourceLine<{}>) => props._inj_sourceLine;
@@ -53,6 +53,7 @@ describe("Vite integration", () => {
         sourceAwareInjectionPlugin({
           injectFileName: true,
           injectSourceLine: true,
+          injectUniqueId: true,
         }),
       ],
       build: {
@@ -77,5 +78,6 @@ describe("Vite integration", () => {
     expect(chunk?.code ?? "").toContain("RepositoryPage.test.tsx:5");
     expect(chunk?.code ?? "").toContain("RepositoryPage.test.tsx:6");
     expect(chunk?.code ?? "").toContain("RepositoryPage.test.tsx:7");
+    expect(chunk?.code ?? "").toMatch(/inj_[0-9a-f]{32}/);
   });
 });

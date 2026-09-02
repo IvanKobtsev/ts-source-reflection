@@ -8,3 +8,7 @@ export type InjectFileName<Props> = Omit<Props, "_inj_sourceFileName"> & {
 export type InjectSourceLine<Props> = Omit<Props, "_inj_sourceLine"> & {
   _inj_sourceLine?: string;
 };
+
+export type InjectUniqueId<Props> = Omit<Props, "_inj_uniqueId"> & {
+  _inj_uniqueId?: string;
+};

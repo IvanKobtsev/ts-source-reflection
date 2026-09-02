@@ -1,5 +1,5 @@
 import { expectTypeOf, it } from "vitest";
-import type { InjectFileName, InjectSourceLine } from "../src";
+import type { InjectFileName, InjectSourceLine, InjectUniqueId } from "../src";
 
 it("makes only _inj_sourceFileName optional and string-valued", () => {
   type Props = InjectFileName<{
@@ -16,6 +16,18 @@ it("makes only _inj_sourceFileName optional and string-valued", () => {
   expectTypeOf(explicit._inj_sourceFileName).toEqualTypeOf<
     string | undefined
   >();
+});
+
+it("composes unique IDs with the other injection types", () => {
+  type Props = InjectUniqueId<
+    InjectSourceLine<
+      InjectFileName<{ required: number; _inj_uniqueId: number }>
+    >
+  >;
+  const value: Props = { required: 1 };
+  expectTypeOf(value._inj_uniqueId).toEqualTypeOf<string | undefined>();
+  expectTypeOf(value._inj_sourceLine).toEqualTypeOf<string | undefined>();
+  expectTypeOf(value._inj_sourceFileName).toEqualTypeOf<string | undefined>();
 });
 
 it("composes filename and source-line injection types", () => {

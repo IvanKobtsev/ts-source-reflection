@@ -12,9 +12,9 @@ try {
   await fs.writeFile(
     path.join(root, "Provider.tsx"),
     `
-      import { InjectFileName, InjectSourceLine } from 'ts-source-reflection';
-      type Props = InjectFileName<InjectSourceLine<{}>>;
-      export const Provider = ({ _inj_sourceFileName, _inj_sourceLine }: Props) => [_inj_sourceFileName, _inj_sourceLine];
+      import { InjectFileName, InjectSourceLine, InjectUniqueId } from 'ts-source-reflection';
+      type Props = InjectFileName<InjectSourceLine<InjectUniqueId<{}>>>;
+      export const Provider = ({ _inj_sourceFileName, _inj_sourceLine, _inj_uniqueId }: Props) => [_inj_sourceFileName, _inj_sourceLine, _inj_uniqueId];
       export function run(props: InjectSourceLine<{}>) { return props._inj_sourceLine; }
       export function useToast() {
         const showToast = (props: InjectSourceLine<{}>) => props._inj_sourceLine;
@@ -40,6 +40,7 @@ try {
       sourceAwareInjectionPlugin({
         injectFileName: true,
         injectSourceLine: true,
+        injectUniqueId: true,
       }),
     ],
     build: {
@@ -75,6 +76,12 @@ try {
     throw new Error(
       "Published ESM plugin did not inject a returned function call",
     );
+  }
+  if (!/inj_[0-9a-f]{32}/.test(code)) {
+    throw new Error("Published ESM plugin did not inject a deterministic ID");
+  }
+  if (code.includes("node:crypto") || code.includes("createHash")) {
+    throw new Error("Application output contains build-time hashing code");
   }
 } finally {
   await fs.rm(root, { recursive: true, force: true });

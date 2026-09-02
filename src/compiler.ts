@@ -3,6 +3,7 @@ import generatorModule from "@babel/generator";
 import { parse, type ParseResult } from "@babel/parser";
 import traverseModule, { type NodePath } from "@babel/traverse";
 import * as t from "@babel/types";
+import { createHash } from "node:crypto";
 
 const traverse: typeof traverseModule =
   typeof traverseModule === "function"
@@ -14,18 +15,22 @@ const generate: typeof generatorModule =
     : (generatorModule as unknown as { default: typeof generatorModule })
         .default;
 
-export type InjectionSource = "importer-file-name" | "importer-source-line";
+export type InjectionSource =
+  "importer-file-name" | "importer-source-line" | "importer-unique-id";
 export interface InjectionMetadata {
-  property: "_inj_sourceFileName" | "_inj_sourceLine";
+  property: "_inj_sourceFileName" | "_inj_sourceLine" | "_inj_uniqueId";
   source: InjectionSource;
 }
 export interface InjectionContext {
   consumerFileName: string;
   consumerSourcePath: string;
   line: number;
+  column: number;
+  callKind: "jsx" | "function";
+  parameterIndex: number;
 }
 export interface InjectionDefinition extends InjectionMetadata {
-  markerName: "InjectFileName" | "InjectSourceLine";
+  markerName: "InjectFileName" | "InjectSourceLine" | "InjectUniqueId";
   enabled: boolean;
   resolve(context: InjectionContext): string;
 }
@@ -50,6 +55,7 @@ export interface SourceAwareExportMetadata {
 export function createInjectionRegistry(options: {
   injectFileName: boolean;
   injectSourceLine: boolean;
+  injectUniqueId?: boolean;
 }): InjectionDefinition[] {
   return [
     {
@@ -67,7 +73,26 @@ export function createInjectionRegistry(options: {
       resolve: ({ consumerSourcePath, line }) =>
         `${consumerSourcePath}:${line}`,
     },
+    {
+      markerName: "InjectUniqueId",
+      property: "_inj_uniqueId",
+      source: "importer-unique-id",
+      enabled: options.injectUniqueId ?? false,
+      resolve: createDeterministicUniqueId,
+    },
   ];
+}
+
+export function createDeterministicUniqueId(context: InjectionContext): string {
+  const identity = [
+    context.consumerSourcePath.replaceAll("\\", "/"),
+    context.callKind,
+    context.line,
+    context.column,
+    context.parameterIndex,
+    "_inj_uniqueId",
+  ].join("\0");
+  return `inj_${createHash("sha256").update(identity).digest("hex").slice(0, 32)}`;
 }
 
 interface MemberCallAnalysis {
@@ -636,6 +661,18 @@ function hasObjectProperty(
   );
 }
 
+function callSiteLocation(
+  call: t.CallExpression,
+): t.SourceLocation["start"] | null {
+  const callee = call.callee;
+  if (
+    (t.isMemberExpression(callee) || t.isOptionalMemberExpression(callee)) &&
+    callee.property.loc
+  )
+    return callee.property.loc.start;
+  return callee.loc?.start ?? null;
+}
+
 export function transformConsumer(options: {
   parsed: ParsedConsumer;
   usages: ResolvedExportUsage[];
@@ -724,8 +761,8 @@ export function transformConsumer(options: {
             parsed.id,
             call,
           );
-        const line = call.loc?.start.line;
-        if (!line)
+        const location = callSiteLocation(call);
+        if (!location)
           throw new SourceAwareCompilerError(
             `Cannot determine the call line for ${injection.property}`,
             parsed.code,
@@ -739,7 +776,10 @@ export function transformConsumer(options: {
               definition.resolve({
                 consumerFileName,
                 consumerSourcePath,
-                line,
+                line: location.line,
+                column: location.column,
+                callKind: "function",
+                parameterIndex: target.parameterIndex,
               }),
             ),
           ),
@@ -796,8 +836,8 @@ export function transformConsumer(options: {
         continue;
       }
       const definition = definitions.get(injection.source);
-      const line = element.loc?.start.line;
-      if (!definition || !line)
+      const location = element.loc?.start;
+      if (!definition || !location)
         throw new SourceAwareCompilerError(
           `Cannot resolve ${injection.property} at JSX call site`,
           parsed.code,
@@ -808,7 +848,14 @@ export function transformConsumer(options: {
         t.jsxAttribute(
           t.jsxIdentifier(injection.property),
           t.stringLiteral(
-            definition.resolve({ consumerFileName, consumerSourcePath, line }),
+            definition.resolve({
+              consumerFileName,
+              consumerSourcePath,
+              line: location.line,
+              column: location.column,
+              callKind: "jsx",
+              parameterIndex: 0,
+            }),
           ),
         ),
       );

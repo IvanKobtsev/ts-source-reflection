@@ -17,6 +17,7 @@ export default defineConfig({
     sourceAwareInjectionPlugin({
       injectFileName: true,
       injectSourceLine: true,
+      injectUniqueId: true,
     }),
     react(),
   ],
@@ -29,18 +30,27 @@ the project.
 ## Injection types
 
 ```tsx
-import type { InjectFileName, InjectSourceLine } from "ts-source-reflection";
+import type {
+  InjectFileName,
+  InjectSourceLine,
+  InjectUniqueId,
+} from "ts-source-reflection";
 
 type ProviderProps = InjectFileName<
-  InjectSourceLine<{ children: React.ReactNode }>
+  InjectSourceLine<InjectUniqueId<{ children: React.ReactNode }>>
 >;
 
 export const Provider = ({
   children,
   _inj_sourceFileName,
   _inj_sourceLine,
+  _inj_uniqueId,
 }: ProviderProps) => (
-  <section data-file={_inj_sourceFileName} data-source={_inj_sourceLine}>
+  <section
+    data-file={_inj_sourceFileName}
+    data-source={_inj_sourceLine}
+    data-id={_inj_uniqueId}
+  >
     {children}
   </section>
 );
@@ -60,6 +70,7 @@ Conceptual output:
 <Provider
   _inj_sourceFileName="RepositoryPage"
   _inj_sourceLine="src/pages/RepositoryPage.tsx:3"
+  _inj_uniqueId="inj_8d36e0c245d74bd2a6ecb4763ad1db42"
 >
   content
 </Provider>
@@ -68,6 +79,12 @@ Conceptual output:
 Source-line values use a Vite-root-relative path with `/` separators and the
 1-based line containing the JSX opening tag. Multiple component usages receive
 their own lines.
+
+Unique IDs are deterministic 128-bit call-site hashes. They remain stable while
+the root-relative path, line, column, call kind, and parameter position remain
+unchanged. Repeated runtime executions of one static call site intentionally
+reuse the same ID; moving the call changes it. Hashing happens only while Vite
+builds the module.
 
 Injected props remain optional in TypeScript because direct calls and runtimes
 that bypass the Vite transform cannot receive compile-time values.
@@ -113,6 +130,7 @@ parameters are rejected.
 sourceAwareInjectionPlugin({
   injectFileName: true,
   injectSourceLine: false,
+  injectUniqueId: true,
   include: ["src/**/*.ts", "src/**/*.tsx"],
   exclude: ["src/generated/**"],
   explicitProperty: "preserve", // or "error"
