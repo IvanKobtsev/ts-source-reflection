@@ -37,6 +37,7 @@ export interface InjectionDefinition extends InjectionMetadata {
 export interface InjectionTarget {
   parameterIndex: number;
   injections: InjectionMetadata[];
+  allowsOmission: boolean;
 }
 export interface CallableInjectionMetadata {
   targets: InjectionTarget[];
@@ -298,21 +299,22 @@ export function discoverExports(
     fn: t.Function,
   ): CallableInjectionMetadata | undefined => {
     const targets: InjectionTarget[] = [];
+    const optionalParameterIndexes = fn.params.flatMap((parameter, index) => {
+      const candidate = unwrapParameter(parameter);
+      const optional = "optional" in candidate && candidate.optional;
+      return optional ||
+        t.isAssignmentPattern(candidate) ||
+        t.isRestElement(candidate)
+        ? [index]
+        : [];
+    });
     fn.params.forEach((parameter, parameterIndex) => {
       const injections = injectionsForType(parameterType(parameter));
       if (!injections || injections.length === 0) return;
       const candidate = unwrapParameter(parameter);
       const optional = "optional" in candidate && candidate.optional;
-      if (
-        optional ||
-        t.isAssignmentPattern(candidate) ||
-        t.isRestElement(candidate)
-      ) {
-        const kind = optional
-          ? "optional"
-          : t.isAssignmentPattern(candidate)
-            ? "defaulted"
-            : "rest";
+      if (t.isAssignmentPattern(candidate) || t.isRestElement(candidate)) {
+        const kind = t.isAssignmentPattern(candidate) ? "defaulted" : "rest";
         throw new SourceAwareCompilerError(
           `Injected parameter ${parameterIndex} cannot be ${kind}`,
           code,
@@ -320,7 +322,22 @@ export function discoverExports(
           candidate,
         );
       }
-      targets.push({ parameterIndex, injections });
+      if (
+        optional &&
+        (optionalParameterIndexes.length !== 1 ||
+          parameterIndex !== fn.params.length - 1)
+      )
+        throw new SourceAwareCompilerError(
+          `Injected optional parameter ${parameterIndex} must be the function's only optional argument and must be last`,
+          code,
+          id,
+          candidate,
+        );
+      targets.push({
+        parameterIndex,
+        injections,
+        allowsOmission: Boolean(optional),
+      });
     });
     return targets.length > 0 ? { targets } : undefined;
   };
@@ -706,8 +723,20 @@ export function transformConsumer(options: {
     member?: string,
   ) => {
     for (const target of callable.targets) {
-      const argument = call.arguments[target.parameterIndex];
-      const object = unwrapObjectArgument(argument);
+      let argument = call.arguments[target.parameterIndex];
+      if (!argument && target.allowsOmission) {
+        if (call.arguments.length !== target.parameterIndex)
+          throw new SourceAwareCompilerError(
+            `Cannot synthesize optional injected argument ${target.parameterIndex} when preceding arguments are missing`,
+            parsed.code,
+            parsed.id,
+            call,
+            details(usage, member),
+          );
+        argument = t.objectExpression([]);
+        call.arguments.push(argument);
+        changed = true;
+      }
       if (!argument)
         throw new SourceAwareCompilerError(
           `Missing required injected argument at parameter ${target.parameterIndex}`,
@@ -716,6 +745,7 @@ export function transformConsumer(options: {
           call,
           details(usage, member),
         );
+      const object = unwrapObjectArgument(argument);
       if (!object)
         throw new SourceAwareCompilerError(
           `Injected argument at parameter ${target.parameterIndex} must be an object literal`,

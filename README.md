@@ -121,8 +121,9 @@ showToast({ content: "Saved" });
 
 Direct and renamed destructuring, stored result member calls, and chained calls
 such as `useToast().showToast({})` are supported. Injected call arguments must be
-present object literals without spreads. Optional, defaulted, and rest marked
-parameters are rejected.
+object literals without spreads. A final marked `props?` parameter may be omitted
+when it is the function's only optional argument; the plugin synthesizes the
+object. Defaulted and rest marked parameters remain unsupported.
 
 ## Options
 

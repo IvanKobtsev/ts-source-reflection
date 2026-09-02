@@ -308,7 +308,6 @@ describe("function injection discovery", () => {
   });
 
   it.each([
-    ["optional", "props?: InjectSourceLine<{}>"],
     ["defaulted", "props: InjectSourceLine<{}> = {}"],
     ["rest", "...props: InjectSourceLine<{}>"],
   ])("rejects %s injected parameters", (_kind, parameter) => {
@@ -319,6 +318,28 @@ describe("function injection discovery", () => {
         both,
       ),
     ).toThrow(/cannot be/);
+  });
+
+  it("allows one final optional injected parameter", () => {
+    const metadata = discoverComponents(
+      `import type { InjectSourceLine } from 'ts-source-reflection'; export function showErrorToast(message: string, props?: InjectSourceLine<{}>) {}`,
+      provider,
+      both,
+    );
+    expect(metadata[0]?.callable?.targets[0]).toMatchObject({
+      parameterIndex: 1,
+      allowsOmission: true,
+    });
+  });
+
+  it("rejects a marked optional parameter when another argument is optional", () => {
+    expect(() =>
+      discoverComponents(
+        `import type { InjectSourceLine } from 'ts-source-reflection'; export function bad(first?: string, props?: InjectSourceLine<{}>) {}`,
+        provider,
+        both,
+      ),
+    ).toThrow(/only optional argument/);
   });
 
   it("rejects conditional factory return shapes", () => {
@@ -358,6 +379,16 @@ describe("ordinary and factory-returned call transformation", () => {
       `import { run as execute } from './Provider';\nexecute("first", 2, { doThing() {} });`,
     );
     expect(result?.code).toContain('_inj_sourceLine: "src/Caller.ts:2"');
+  });
+
+  it("synthesizes an omitted final optional props object", () => {
+    const result = transformCalls(
+      `import type { InjectSourceLine } from 'ts-source-reflection'; export function showErrorToast(message: string, props?: InjectSourceLine<{}>) {}`,
+      `import { showErrorToast } from './Provider';\nshowErrorToast("text");`,
+    );
+    expect(result?.code).toMatch(
+      /showErrorToast\("text", \{\s*_inj_sourceLine: "src\/Caller\.ts:2"\s*\}\)/,
+    );
   });
 
   it("injects destructured, renamed, stored-member, and chained factory calls", () => {
