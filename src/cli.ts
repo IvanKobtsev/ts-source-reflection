@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import path from "node:path";
-import { resolveConfig, type Plugin, type ResolvedConfig } from "vite";
+import { createServer, type Plugin, type ResolvedConfig } from "vite";
 import type { SourceAwarePluginApi } from "./plugin";
 import { formatVerificationResult } from "./verifier";
 
@@ -13,6 +13,27 @@ interface CliOptions {
 }
 
 class CliError extends Error {}
+
+async function suppressNonErrorConsole<T>(run: () => Promise<T>): Promise<T> {
+  const original = {
+    log: console.log,
+    info: console.info,
+    warn: console.warn,
+    debug: console.debug,
+  };
+  console.log = () => undefined;
+  console.info = () => undefined;
+  console.warn = () => undefined;
+  console.debug = () => undefined;
+  try {
+    return await run();
+  } finally {
+    console.log = original.log;
+    console.info = original.info;
+    console.warn = original.warn;
+    console.debug = original.debug;
+  }
+}
 
 function usage(): string {
   return `Usage: ts-source-reflection check [options]
@@ -72,36 +93,40 @@ async function main(): Promise<void> {
         : usage(),
     );
   const root = path.resolve(options.root);
-  const config = await resolveConfig(
-    {
+  const result = await suppressNonErrorConsole(async () => {
+    const server = await createServer({
       root,
       configFile: options.config
         ? path.resolve(root, options.config)
         : undefined,
       mode: options.mode,
-    },
-    "build",
-    options.mode,
-  );
-  const apis = configuredApis(config);
-  if (apis.length === 0)
-    throw new CliError(
-      "The resolved Vite config does not register sourceAwareInjectionPlugin().",
-    );
-  if (apis.length > 1)
-    throw new CliError(
-      "The resolved Vite config contains multiple sourceAwareInjectionPlugin() instances.",
-    );
-  const api = apis[0]!;
-  if (!api.enabled)
-    throw new CliError(
-      "sourceAwareInjectionPlugin() has no enabled injection types.",
-    );
-  const resolve = config.createResolver();
-  const result = await api.verify(
-    async (source, importer) =>
-      (await resolve(source, importer, false, false)) ?? null,
-  );
+      logLevel: "error",
+      clearScreen: false,
+      appType: "custom",
+      server: { middlewareMode: true, hmr: false },
+    });
+    try {
+      const apis = configuredApis(server.config);
+      if (apis.length === 0)
+        throw new CliError(
+          "The resolved Vite config does not register sourceAwareInjectionPlugin().",
+        );
+      if (apis.length > 1)
+        throw new CliError(
+          "The resolved Vite config contains multiple sourceAwareInjectionPlugin() instances.",
+        );
+      const api = apis[0]!;
+      return await api.verify(async (source, importer) => {
+        const resolved = await server.pluginContainer.resolveId(
+          source,
+          importer,
+        );
+        return resolved?.id ?? null;
+      });
+    } finally {
+      await server.close();
+    }
+  });
   console.log(formatVerificationResult(result, options.format));
   if (!result.ok) process.exitCode = 1;
 }

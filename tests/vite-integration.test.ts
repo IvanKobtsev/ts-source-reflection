@@ -49,13 +49,7 @@ describe("Vite integration", () => {
     const output = await build({
       root,
       logLevel: "silent",
-      plugins: [
-        sourceAwareInjectionPlugin({
-          injectFileName: true,
-          injectSourceLine: true,
-          injectUniqueId: true,
-        }),
-      ],
+      plugins: [sourceAwareInjectionPlugin()],
       build: {
         write: false,
         minify: false,
@@ -102,12 +96,7 @@ describe("Vite integration", () => {
       build({
         root,
         logLevel: "silent",
-        plugins: [
-          sourceAwareInjectionPlugin({
-            injectSourceLine: true,
-            exclude: ["**/excluded/**"],
-          }),
-        ],
+        plugins: [sourceAwareInjectionPlugin({ exclude: ["**/excluded/**"] })],
         build: {
           write: false,
           lib: { entry: path.join(root, "entry.ts"), formats: ["es"] },

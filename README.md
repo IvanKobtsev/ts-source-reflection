@@ -13,19 +13,12 @@ import react from "@vitejs/plugin-react";
 import { sourceAwareInjectionPlugin } from "ts-source-reflection";
 
 export default defineConfig({
-  plugins: [
-    sourceAwareInjectionPlugin({
-      injectFileName: true,
-      injectSourceLine: true,
-      injectUniqueId: true,
-    }),
-    react(),
-  ],
+  plugins: [sourceAwareInjectionPlugin(), react()],
 });
 ```
 
-All injection kinds are disabled by default. Enable only the metadata used by
-the project.
+Injection markers are active automatically. Writing a marker on a declaration
+is the only opt-in required for that injection.
 
 ## Injection types
 
@@ -129,9 +122,6 @@ object. Defaulted and rest marked parameters remain unsupported.
 
 ```ts
 sourceAwareInjectionPlugin({
-  injectFileName: true,
-  injectSourceLine: false,
-  injectUniqueId: true,
   include: ["src/**/*.ts", "src/**/*.tsx"],
   exclude: ["src/generated/**"],
   explicitProperty: "preserve", // or "error"

@@ -13,18 +13,10 @@ import {
   createSourceFilter,
   deriveConsumerFileName,
   deriveConsumerSourcePath,
-  sourceAwareInjectionPlugin,
 } from "../src/plugin";
 
 const provider = "/src/Provider.tsx";
-const both = createInjectionRegistry({
-  injectFileName: true,
-  injectSourceLine: true,
-});
-const fileOnly = createInjectionRegistry({
-  injectFileName: true,
-  injectSourceLine: false,
-});
+const registry = createInjectionRegistry();
 
 describe("component discovery", () => {
   it("discovers functions, arrows, aliases, and nested markers", () => {
@@ -35,7 +27,7 @@ describe("component discovery", () => {
       export const ArrowProvider = (props: Line<File<{}>>) => null;
       export const Plain = (props: {}) => null;
     `;
-    const metadata = discoverComponents(code, provider, both);
+    const metadata = discoverComponents(code, provider, registry);
     expect(metadata.map((item) => item.exportName)).toEqual([
       "FunctionProvider",
       "ArrowProvider",
@@ -50,7 +42,7 @@ describe("component discovery", () => {
     ]);
   });
 
-  it("peels disabled outer markers and ignores indirect aliases", () => {
+  it("discovers every nested marker and ignores indirect aliases", () => {
     const code = `
       import type { InjectFileName, InjectSourceLine } from 'ts-source-reflection';
       type Marked = InjectSourceLine<InjectFileName<{}>>;
@@ -58,52 +50,37 @@ describe("component discovery", () => {
       export const One = (props: Marked) => null;
       export const Unsupported = (props: Indirect) => null;
     `;
-    const metadata = discoverComponents(code, provider, fileOnly);
+    const metadata = discoverComponents(code, provider, registry);
     expect(metadata).toHaveLength(1);
     expect(metadata[0]?.callable?.targets[0]?.injections).toEqual([
+      { property: "_inj_sourceLine", source: "importer-source-line" },
       { property: "_inj_sourceFileName", source: "importer-file-name" },
     ]);
   });
 
-  it("produces no metadata when all marker types are disabled", () => {
-    const registry = createInjectionRegistry({
-      injectFileName: false,
-      injectSourceLine: false,
-    });
-    expect(
-      discoverComponents(
-        `import type { InjectFileName } from 'ts-source-reflection'; export const P = (p: InjectFileName<{}>) => null;`,
-        provider,
-        registry,
-      ),
-    ).toEqual([]);
-  });
-
-  it("enables source-line injection independently", () => {
-    const lineOnly = createInjectionRegistry({
-      injectFileName: false,
-      injectSourceLine: true,
-    });
+  it("activates every recognized marker without configuration flags", () => {
     const metadata = discoverComponents(
-      `import type { InjectFileName, InjectSourceLine } from 'ts-source-reflection'; export const P = (p: InjectFileName<InjectSourceLine<{}>>) => null;`,
+      `import type { InjectFileName, InjectSourceLine, InjectUniqueId } from 'ts-source-reflection'; export const P = (p: InjectFileName<InjectSourceLine<InjectUniqueId<{}>>>) => null;`,
       provider,
-      lineOnly,
+      registry,
     );
     expect(metadata[0]?.callable?.targets[0]?.injections).toEqual([
+      { property: "_inj_sourceFileName", source: "importer-file-name" },
       { property: "_inj_sourceLine", source: "importer-source-line" },
+      { property: "_inj_uniqueId", source: "importer-unique-id" },
     ]);
   });
 
   it("rejects malformed and duplicate markers with code frames", () => {
     const malformed = `import type { InjectSourceLine } from 'ts-source-reflection';\nexport const Bad = (props: InjectSourceLine) => null;`;
-    expect(() => discoverComponents(malformed, provider, both)).toThrow(
+    expect(() => discoverComponents(malformed, provider, registry)).toThrow(
       /exactly one type argument/,
     );
-    expect(() => discoverComponents(malformed, provider, both)).toThrow(
+    expect(() => discoverComponents(malformed, provider, registry)).toThrow(
       /Provider\.tsx:2:/,
     );
     const duplicate = `import type { InjectFileName } from 'ts-source-reflection';\nexport const Bad = (props: InjectFileName<InjectFileName<{}>>) => null;`;
-    expect(() => discoverComponents(duplicate, provider, both)).toThrow(
+    expect(() => discoverComponents(duplicate, provider, registry)).toThrow(
       /Duplicate injection marker/,
     );
   });
@@ -190,27 +167,13 @@ describe("deterministic unique IDs", () => {
   });
 });
 
-describe("plugin options", () => {
-  it("does not parse transforms when no injection type is enabled", async () => {
-    const plugin = sourceAwareInjectionPlugin();
-    expect(typeof plugin.transform).toBe("function");
-    if (typeof plugin.transform !== "function") return;
-    await expect(
-      Reflect.apply(plugin.transform, {}, [
-        "not valid TypeScript }}}",
-        "/src/Bad.ts",
-      ]),
-    ).resolves.toBeNull();
-  });
-});
-
 describe("consumer transformation", () => {
   function transform(
     code: string,
     metadata = discoverComponents(
       `import type { InjectFileName, InjectSourceLine } from 'ts-source-reflection'; export const Provider = (p: InjectFileName<InjectSourceLine<{}>>) => null;`,
       provider,
-      both,
+      registry,
     )[0]!,
     explicitProperty: "preserve" | "error" = "preserve",
   ) {
@@ -227,7 +190,7 @@ describe("consumer transformation", () => {
     return transformConsumer({
       parsed,
       usages: [usage],
-      registry: both,
+      registry,
       consumerFileName: "TestCaseView",
       consumerSourcePath: "src/pages/TestCaseView.tsx",
       explicitProperty,
@@ -298,7 +261,7 @@ describe("function injection discovery", () => {
         }
       `,
       provider,
-      both,
+      registry,
     );
     expect(metadata[0]?.callable?.targets[0]?.parameterIndex).toBe(1);
     expect(metadata[1]?.returnedMembers?.[0]?.memberName).toBe("showToast");
@@ -315,7 +278,7 @@ describe("function injection discovery", () => {
       discoverComponents(
         `import type { InjectSourceLine } from 'ts-source-reflection'; export function bad(${parameter}) {}`,
         provider,
-        both,
+        registry,
       ),
     ).toThrow(/cannot be/);
   });
@@ -324,7 +287,7 @@ describe("function injection discovery", () => {
     const metadata = discoverComponents(
       `import type { InjectSourceLine } from 'ts-source-reflection'; export function showErrorToast(message: string, props?: InjectSourceLine<{}>) {}`,
       provider,
-      both,
+      registry,
     );
     expect(metadata[0]?.callable?.targets[0]).toMatchObject({
       parameterIndex: 1,
@@ -337,7 +300,7 @@ describe("function injection discovery", () => {
       discoverComponents(
         `import type { InjectSourceLine } from 'ts-source-reflection'; export function bad(first?: string, props?: InjectSourceLine<{}>) {}`,
         provider,
-        both,
+        registry,
       ),
     ).toThrow(/only optional argument/);
   });
@@ -347,7 +310,7 @@ describe("function injection discovery", () => {
       discoverComponents(
         `import type { InjectSourceLine } from 'ts-source-reflection'; export function factory(ok: boolean) { const run = (p: InjectSourceLine<{}>) => {}; if (ok) return { run }; return { run }; }`,
         provider,
-        both,
+        registry,
       ),
     ).toThrow(/one direct unconditional object return/);
   });
@@ -355,7 +318,7 @@ describe("function injection discovery", () => {
 
 describe("ordinary and factory-returned call transformation", () => {
   const transformCalls = (providerCode: string, consumerCode: string) => {
-    const metadata = discoverComponents(providerCode, provider, both)[0]!;
+    const metadata = discoverComponents(providerCode, provider, registry)[0]!;
     const parsed = analyzeConsumer(consumerCode, "/repo/src/Caller.ts");
     const specifier = parsed.imports[0]!.specifiers[0]!;
     const usage: ResolvedExportUsage = {
@@ -366,7 +329,7 @@ describe("ordinary and factory-returned call transformation", () => {
     return transformConsumer({
       parsed,
       usages: [usage],
-      registry: both,
+      registry,
       consumerFileName: "Caller",
       consumerSourcePath: "src/Caller.ts",
       explicitProperty: "preserve",
@@ -468,11 +431,7 @@ export function FloatingLinkEditor() {
   });
 
   it("injects distinct stable IDs into direct and returned calls", () => {
-    const uniqueRegistry = createInjectionRegistry({
-      injectFileName: false,
-      injectSourceLine: false,
-      injectUniqueId: true,
-    });
+    const uniqueRegistry = createInjectionRegistry();
     const providerCode = `import type { InjectUniqueId } from 'ts-source-reflection'; export function make(props: InjectUniqueId<{}>) { return { run: (value: InjectUniqueId<{}>) => value }; }`;
     const metadata = discoverComponents(
       providerCode,

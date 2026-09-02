@@ -31,7 +31,6 @@ export interface InjectionContext {
 }
 export interface InjectionDefinition extends InjectionMetadata {
   markerName: "InjectFileName" | "InjectSourceLine" | "InjectUniqueId";
-  enabled: boolean;
   resolve(context: InjectionContext): string;
 }
 export interface InjectionTarget {
@@ -53,24 +52,18 @@ export interface SourceAwareExportMetadata {
   returnedMembers?: ReturnedMemberMetadata[];
 }
 
-export function createInjectionRegistry(options: {
-  injectFileName: boolean;
-  injectSourceLine: boolean;
-  injectUniqueId?: boolean;
-}): InjectionDefinition[] {
+export function createInjectionRegistry(): InjectionDefinition[] {
   return [
     {
       markerName: "InjectFileName",
       property: "_inj_sourceFileName",
       source: "importer-file-name",
-      enabled: options.injectFileName,
       resolve: ({ consumerFileName }) => consumerFileName,
     },
     {
       markerName: "InjectSourceLine",
       property: "_inj_sourceLine",
       source: "importer-source-line",
-      enabled: options.injectSourceLine,
       resolve: ({ consumerSourcePath, line }) =>
         `${consumerSourcePath}:${line}`,
     },
@@ -78,7 +71,6 @@ export function createInjectionRegistry(options: {
       markerName: "InjectUniqueId",
       property: "_inj_uniqueId",
       source: "importer-unique-id",
-      enabled: options.injectUniqueId ?? false,
       resolve: createDeterministicUniqueId,
     },
   ];
@@ -273,12 +265,10 @@ export function discoverExports(
         node,
       );
     const nested = readMarkerChain(node.typeParameters.params[0]) ?? [];
-    const injections: InjectionMetadata[] = definition.enabled
-      ? [
-          { property: definition.property, source: definition.source },
-          ...nested,
-        ]
-      : nested;
+    const injections: InjectionMetadata[] = [
+      { property: definition.property, source: definition.source },
+      ...nested,
+    ];
     const properties = new Set<string>();
     for (const injection of injections) {
       if (properties.has(injection.property))
@@ -819,7 +809,7 @@ export function transformConsumer(options: {
         const definition = definitions.get(injection.source);
         if (!definition)
           throw new SourceAwareCompilerError(
-            `No enabled injection resolver exists for ${injection.source}`,
+            `No injection resolver exists for ${injection.source}`,
             parsed.code,
             parsed.id,
             call,

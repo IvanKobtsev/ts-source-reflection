@@ -41,13 +41,7 @@ try {
   const output = await build({
     root,
     logLevel: "silent",
-    plugins: [
-      sourceAwareInjectionPlugin({
-        injectFileName: true,
-        injectSourceLine: true,
-        injectUniqueId: true,
-      }),
-    ],
+    plugins: [sourceAwareInjectionPlugin()],
     build: {
       write: false,
       minify: false,
@@ -94,10 +88,22 @@ try {
   await fs.writeFile(
     path.join(root, "vite.config.mjs"),
     `import { sourceAwareInjectionPlugin } from ${JSON.stringify(pluginUrl)};
-     export default { plugins: [sourceAwareInjectionPlugin({ injectSourceLine: true })] };`,
+     export default { plugins: [
+       sourceAwareInjectionPlugin(),
+       { name: "fixture-alias", resolveId(id) {
+         if (id === "@provider") return ${JSON.stringify(path.join(root, "Provider.tsx"))};
+       }, configResolved() {
+         console.log("UNRELATED_PLUGIN_INFO");
+         console.warn("UNRELATED_PLUGIN_WARNING");
+       } }
+     ] };`,
+  );
+  await fs.writeFile(
+    path.join(root, "AliasedConsumer.ts"),
+    `import { run } from "@provider"; export const aliased = run({});`,
   );
   const cli = path.join(packageRoot, "dist/cli.js");
-  const { stdout } = await execFileAsync(process.execPath, [
+  const { stdout, stderr } = await execFileAsync(process.execPath, [
     cli,
     "check",
     "--root",
@@ -105,6 +111,17 @@ try {
   ]);
   if (!stdout.includes("All injection-aware usages are transformable")) {
     throw new Error("Published CLI did not verify the fixture project");
+  }
+  if (/and 0 call sites/.test(stdout)) {
+    throw new Error(
+      "Published CLI did not resolve imports through Vite plugins",
+    );
+  }
+  if (
+    stdout.includes("UNRELATED_PLUGIN_INFO") ||
+    stderr.includes("UNRELATED_PLUGIN_WARNING")
+  ) {
+    throw new Error("Published CLI leaked unrelated Vite plugin output");
   }
 } finally {
   await fs.rm(root, { recursive: true, force: true });

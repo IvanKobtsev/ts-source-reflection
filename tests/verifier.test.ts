@@ -55,11 +55,7 @@ async function verify(root: string, exclude: string[] = []) {
   );
   return verifyProject({
     root,
-    registry: createInjectionRegistry({
-      injectFileName: false,
-      injectSourceLine: true,
-      injectUniqueId: false,
-    }),
+    registry: createInjectionRegistry(),
     explicitProperty: "preserve",
     isIncluded: filter,
     resolve: localResolver,

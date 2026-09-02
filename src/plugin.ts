@@ -22,9 +22,6 @@ export interface SourceAwareInjectionPluginOptions {
   include?: string[];
   exclude?: string[];
   explicitProperty?: "preserve" | "error";
-  injectFileName?: boolean;
-  injectSourceLine?: boolean;
-  injectUniqueId?: boolean;
 }
 
 interface ProviderCacheEntry {
@@ -35,7 +32,6 @@ interface ProviderCacheEntry {
 export interface SourceAwarePluginApi {
   readonly kind: "ts-source-reflection";
   readonly version: 1;
-  readonly enabled: boolean;
   verify(
     resolve: (source: string, importer: string) => Promise<string | null>,
   ): Promise<VerificationResult>;
@@ -99,12 +95,7 @@ export function sourceAwareInjectionPlugin(
   options: SourceAwareInjectionPluginOptions = {},
 ): Plugin & { api: SourceAwarePluginApi } {
   const explicitProperty = options.explicitProperty ?? "preserve";
-  const registry = createInjectionRegistry({
-    injectFileName: options.injectFileName ?? false,
-    injectSourceLine: options.injectSourceLine ?? false,
-    injectUniqueId: options.injectUniqueId ?? false,
-  });
-  const hasEnabledInjections = registry.some(({ enabled }) => enabled);
+  const registry = createInjectionRegistry();
   const metadata = new Map<string, Map<string, SourceAwareExportMetadata>>();
   const providerCache = new Map<string, ProviderCacheEntry>();
   const providerConsumers = new Map<string, Set<string>>();
@@ -193,7 +184,6 @@ export function sourceAwareInjectionPlugin(
     api: {
       kind: "ts-source-reflection",
       version: 1,
-      enabled: hasEnabledInjections,
       verify: runVerification,
     },
     configResolved(resolved) {
@@ -201,7 +191,6 @@ export function sourceAwareInjectionPlugin(
       isIncluded = createSourceFilter(config.root, options);
     },
     async buildStart() {
-      if (!hasEnabledInjections) return;
       if (config.command === "build") {
         const result = await runVerification(async (source, importer) => {
           const resolved = await this.resolve(source, importer, {
@@ -225,7 +214,6 @@ export function sourceAwareInjectionPlugin(
       }
     },
     async transform(code, rawId) {
-      if (!hasEnabledInjections) return null;
       const id = canonicalFileId(rawId);
       const fileName = deriveConsumerFileName(rawId);
       const sourcePath = deriveConsumerSourcePath(config.root, rawId);
@@ -304,7 +292,6 @@ export function sourceAwareInjectionPlugin(
       }
     },
     async handleHotUpdate(ctx) {
-      if (!hasEnabledInjections) return;
       const id = canonicalFileId(ctx.file);
       if (!id || !isIncluded(id)) return;
       importResolutionCache.delete(id);

@@ -1,5 +1,14 @@
 import { expectTypeOf, it } from "vitest";
 import type { InjectFileName, InjectSourceLine, InjectUniqueId } from "../src";
+import type { SourceAwareInjectionPluginOptions } from "../src";
+
+it("does not expose per-injector enable flags", () => {
+  const options: SourceAwareInjectionPluginOptions = {
+    // @ts-expect-error Injection markers are the sole opt-in mechanism.
+    injectFileName: true,
+  };
+  expectTypeOf(options).toMatchTypeOf<SourceAwareInjectionPluginOptions>();
+});
 
 it("makes only _inj_sourceFileName optional and string-valued", () => {
   type Props = InjectFileName<{
