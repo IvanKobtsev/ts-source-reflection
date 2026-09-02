@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { build } from "vite";
-import { sourceAwareProps } from "../src";
+import { sourceAwareInjectionPlugin } from "../src";
 
 const temporaryDirectories: string[] = [];
 
@@ -24,23 +24,37 @@ describe("Vite integration", () => {
     await fs.writeFile(
       path.join(root, "Provider.tsx"),
       `
-        import { WithFileName } from 'ts-source-reflection';
-        type Props = WithFileName<{}>;
-        export const Provider = ({ _inj_sourceFileName }: Props) => _inj_sourceFileName;
+        import { InjectFileName, InjectSourceLine } from 'ts-source-reflection';
+        type Props = InjectFileName<InjectSourceLine<{}>>;
+        export const Provider = ({ _inj_sourceFileName, _inj_sourceLine }: Props) => [_inj_sourceFileName, _inj_sourceLine];
+        export function run(props: InjectSourceLine<{}>) { return props._inj_sourceLine; }
+        export function useToast() {
+          const showToast = (props: InjectSourceLine<{}>) => props._inj_sourceLine;
+          return { showToast };
+        }
       `,
     );
     await fs.writeFile(
       path.join(root, "RepositoryPage.test.tsx"),
       `
-        import { Provider as Local } from './Provider';
+        import { Provider as Local, run, useToast } from './Provider';
+        const { showToast } = useToast();
         export const value = <Local />;
+        export const direct = run({});
+        export const returned = showToast({});
+        export const chained = useToast().showToast({});
       `,
     );
 
     const output = await build({
       root,
       logLevel: "silent",
-      plugins: [sourceAwareProps()],
+      plugins: [
+        sourceAwareInjectionPlugin({
+          injectFileName: true,
+          injectSourceLine: true,
+        }),
+      ],
       build: {
         write: false,
         minify: false,
@@ -59,5 +73,9 @@ describe("Vite integration", () => {
       : rollupOutput.output;
     const chunk = generated.find((item) => item.type === "chunk");
     expect(chunk?.code ?? "").toContain("RepositoryPage.test");
+    expect(chunk?.code ?? "").toContain("RepositoryPage.test.tsx:4");
+    expect(chunk?.code ?? "").toContain("RepositoryPage.test.tsx:5");
+    expect(chunk?.code ?? "").toContain("RepositoryPage.test.tsx:6");
+    expect(chunk?.code ?? "").toContain("RepositoryPage.test.tsx:7");
   });
 });

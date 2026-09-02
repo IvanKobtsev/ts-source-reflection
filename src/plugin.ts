@@ -4,18 +4,21 @@ import fg from "fast-glob";
 import type { HmrContext, ModuleNode, Plugin, ResolvedConfig } from "vite";
 import { createFilter, normalizePath } from "vite";
 import {
-  discoverComponents,
-  findNamedImports,
+  analyzeConsumer,
+  createInjectionRegistry,
+  discoverExports,
   SourceAwareCompilerError,
   transformConsumer,
-  type ImportedComponent,
-  type SourceAwareComponentMetadata,
+  type ResolvedExportUsage,
+  type SourceAwareExportMetadata,
 } from "./compiler";
 
-export interface SourceAwarePropsOptions {
+export interface SourceAwareInjectionPluginOptions {
   include?: string[];
   exclude?: string[];
   explicitProperty?: "preserve" | "error";
+  injectFileName?: boolean;
+  injectSourceLine?: boolean;
 }
 
 interface ProviderCacheEntry {
@@ -28,7 +31,7 @@ const DEFAULT_EXCLUDE = ["**/node_modules/**", "**/dist/**", "**/*.d.ts"];
 
 export function createSourceFilter(
   root: string,
-  options: Pick<SourceAwarePropsOptions, "include" | "exclude">,
+  options: Pick<SourceAwareInjectionPluginOptions, "include" | "exclude">,
 ): (id: string) => boolean {
   return createFilter(
     options.include ?? DEFAULT_INCLUDE,
@@ -56,19 +59,37 @@ export function deriveConsumerFileName(id: string): string | null {
   return base.slice(0, base.lastIndexOf("."));
 }
 
-function metadataSignature(metadata: SourceAwareComponentMetadata[]): string {
+export function deriveConsumerSourcePath(
+  root: string,
+  id: string,
+): string | null {
+  const consumerId = canonicalFileId(id);
+  if (!consumerId) return null;
+  return normalizePath(path.relative(path.resolve(root), consumerId));
+}
+
+function metadataSignature(metadata: SourceAwareExportMetadata[]): string {
   return JSON.stringify(
     metadata
-      .map(({ exportName, injections }) => ({ exportName, injections }))
+      .map(({ exportName, callable, returnedMembers }) => ({
+        exportName,
+        callable,
+        returnedMembers,
+      }))
       .sort((left, right) => left.exportName.localeCompare(right.exportName)),
   );
 }
 
-export function sourceAwareProps(
-  options: SourceAwarePropsOptions = {},
+export function sourceAwareInjectionPlugin(
+  options: SourceAwareInjectionPluginOptions = {},
 ): Plugin {
   const explicitProperty = options.explicitProperty ?? "preserve";
-  const metadata = new Map<string, Map<string, SourceAwareComponentMetadata>>();
+  const registry = createInjectionRegistry({
+    injectFileName: options.injectFileName ?? false,
+    injectSourceLine: options.injectSourceLine ?? false,
+  });
+  const hasEnabledInjections = registry.some(({ enabled }) => enabled);
+  const metadata = new Map<string, Map<string, SourceAwareExportMetadata>>();
   const providerCache = new Map<string, ProviderCacheEntry>();
   const providerConsumers = new Map<string, Set<string>>();
   const consumerProviders = new Map<string, Set<string>>();
@@ -113,7 +134,7 @@ export function sourceAwareProps(
     const cached = providerCache.get(id);
     if (!force && cached?.version === stat.mtimeMs) return false;
     const code = await fs.readFile(file, "utf8");
-    const found = discoverComponents(code, id);
+    const found = discoverExports(code, id, registry);
     const signature = metadataSignature(found);
     metadata.set(id, new Map(found.map((item) => [item.exportName, item])));
     providerCache.set(id, { version: stat.mtimeMs, signature });
@@ -135,13 +156,14 @@ export function sourceAwareProps(
   };
 
   return {
-    name: "ts-source-reflection:source-aware-props",
+    name: "ts-source-reflection:source-aware-injection",
     enforce: "pre",
     configResolved(resolved) {
       config = resolved;
       isIncluded = createSourceFilter(config.root, options);
     },
     async buildStart() {
+      if (!hasEnabledInjections) return;
       const files = await fg(options.include ?? DEFAULT_INCLUDE, {
         cwd: config.root,
         absolute: true,
@@ -155,12 +177,15 @@ export function sourceAwareProps(
       }
     },
     async transform(code, rawId) {
+      if (!hasEnabledInjections) return null;
       const id = canonicalFileId(rawId);
       const fileName = deriveConsumerFileName(rawId);
+      const sourcePath = deriveConsumerSourcePath(config.root, rawId);
       if (
         !id ||
         !isIncluded(id) ||
         !fileName ||
+        !sourcePath ||
         !/\.[cm]?[jt]sx?$/.test(cleanId(rawId))
       )
         return null;
@@ -169,11 +194,12 @@ export function sourceAwareProps(
       const imports = /\bfrom\s*['"]|\bimport\s*['"]/.test(code);
       if (!imports) return null;
 
-      const resolvedComponents: ImportedComponent[] = [];
+      const parsed = analyzeConsumer(code, id);
+      const resolvedExports: ResolvedExportUsage[] = [];
       const resolutionForConsumer =
         importResolutionCache.get(id) ?? new Map<string, string | null>();
       importResolutionCache.set(id, resolutionForConsumer);
-      for (const imported of findNamedImports(code, id)) {
+      for (const imported of parsed.imports) {
         const source = imported.source;
         let providerId = resolutionForConsumer.get(source);
         if (providerId === undefined) {
@@ -186,12 +212,18 @@ export function sourceAwareProps(
         if (!providerId) continue;
         const exports = metadata.get(providerId);
         if (!exports?.size) continue;
-        for (const { exportName, localName } of imported.specifiers) {
-          if (!exports.has(exportName)) continue;
-          resolvedComponents.push({
-            localName,
-            exportName,
+        for (const specifier of imported.specifiers) {
+          const exportMetadata = exports.get(specifier.exportName);
+          if (!exportMetadata) continue;
+          resolvedExports.push({
+            localName: specifier.localName,
+            exportName: specifier.exportName,
             providerModuleId: providerId,
+            metadata: exportMetadata,
+            openingElements: specifier.openingElements,
+            directCalls: specifier.directCalls,
+            factoryCalls: specifier.factoryCalls,
+            unsupportedReference: specifier.unsupportedReference,
           });
           addEdge(providerId, id);
         }
@@ -199,10 +231,11 @@ export function sourceAwareProps(
 
       try {
         return transformConsumer({
-          code,
-          id,
-          fileName,
-          components: resolvedComponents,
+          parsed,
+          usages: resolvedExports,
+          registry,
+          consumerFileName: fileName,
+          consumerSourcePath: sourcePath,
           explicitProperty,
         });
       } catch (error) {
@@ -212,6 +245,7 @@ export function sourceAwareProps(
       }
     },
     async handleHotUpdate(ctx) {
+      if (!hasEnabledInjections) return;
       const id = canonicalFileId(ctx.file);
       if (!id || !isIncluded(id)) return;
       importResolutionCache.delete(id);

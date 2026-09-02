@@ -1,12 +1,10 @@
-export { sourceAwareProps } from "./plugin";
-export type { SourceAwarePropsOptions } from "./plugin";
+export { sourceAwareInjectionPlugin } from "./plugin";
+export type { SourceAwareInjectionPluginOptions } from "./plugin";
 
-/**
- * Marks a component props type for compile-time filename injection.
- *
- * `_inj_sourceFileName` is optional because code can invoke the component outside a
- * transformed Vite module. The plugin guarantees it only for supported JSX.
- */
-export type WithFileName<Props> = Omit<Props, "_inj_sourceFileName"> & {
+export type InjectFileName<Props> = Omit<Props, "_inj_sourceFileName"> & {
   _inj_sourceFileName?: string;
+};
+
+export type InjectSourceLine<Props> = Omit<Props, "_inj_sourceLine"> & {
+  _inj_sourceLine?: string;
 };

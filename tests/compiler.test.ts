@@ -1,164 +1,242 @@
 import { describe, expect, it } from "vitest";
 import {
+  analyzeConsumer,
+  createInjectionRegistry,
   discoverComponents,
   findNamedImports,
   SourceAwareCompilerError,
   transformConsumer,
+  type ResolvedExportUsage,
 } from "../src/compiler";
-import { createSourceFilter, deriveConsumerFileName } from "../src/plugin";
+import {
+  createSourceFilter,
+  deriveConsumerFileName,
+  deriveConsumerSourcePath,
+  sourceAwareInjectionPlugin,
+} from "../src/plugin";
 
 const provider = "/src/Provider.tsx";
+const both = createInjectionRegistry({
+  injectFileName: true,
+  injectSourceLine: true,
+});
+const fileOnly = createInjectionRegistry({
+  injectFileName: true,
+  injectSourceLine: false,
+});
 
 describe("component discovery", () => {
-  it("discovers exported functions and arrows with inline or direct alias markers", () => {
+  it("discovers functions, arrows, aliases, and nested markers", () => {
     const code = `
-      import type { WithFileName as InjectFile } from 'ts-source-reflection';
-      type Props = InjectFile<{ required: string }>;
+      import type { InjectFileName as File, InjectSourceLine as Line } from 'ts-source-reflection';
+      type Props = File<Line<{ required: string }>>;
       export function FunctionProvider(props: Props) { return null }
-      export const ArrowProvider = (props: InjectFile<{}>) => null;
+      export const ArrowProvider = (props: Line<File<{}>>) => null;
       export const Plain = (props: {}) => null;
     `;
-    expect(
-      discoverComponents(code, provider).map((item) => item.exportName),
-    ).toEqual(["FunctionProvider", "ArrowProvider"]);
+    const metadata = discoverComponents(code, provider, both);
+    expect(metadata.map((item) => item.exportName)).toEqual([
+      "FunctionProvider",
+      "ArrowProvider",
+    ]);
+    expect(metadata[0]?.callable?.targets[0]?.injections).toEqual([
+      { property: "_inj_sourceFileName", source: "importer-file-name" },
+      { property: "_inj_sourceLine", source: "importer-source-line" },
+    ]);
+    expect(metadata[1]?.callable?.targets[0]?.injections).toEqual([
+      { property: "_inj_sourceLine", source: "importer-source-line" },
+      { property: "_inj_sourceFileName", source: "importer-file-name" },
+    ]);
   });
 
-  it("supports several marked exports and ignores indirect aliases", () => {
+  it("peels disabled outer markers and ignores indirect aliases", () => {
     const code = `
-      import type { WithFileName } from 'ts-source-reflection';
-      type Marked = WithFileName<{}>;
+      import type { InjectFileName, InjectSourceLine } from 'ts-source-reflection';
+      type Marked = InjectSourceLine<InjectFileName<{}>>;
       type Indirect = Marked;
       export const One = (props: Marked) => null;
-      export const Two = (props: WithFileName<{}>) => null;
       export const Unsupported = (props: Indirect) => null;
     `;
-    expect(
-      discoverComponents(code, provider).map((item) => item.exportName),
-    ).toEqual(["One", "Two"]);
+    const metadata = discoverComponents(code, provider, fileOnly);
+    expect(metadata).toHaveLength(1);
+    expect(metadata[0]?.callable?.targets[0]?.injections).toEqual([
+      { property: "_inj_sourceFileName", source: "importer-file-name" },
+    ]);
   });
 
-  it("rejects malformed markers with a code frame", () => {
-    const code = `
-      import type { WithFileName } from 'ts-source-reflection';
-      export const Bad = (props: WithFileName) => null;
-    `;
-    expect(() => discoverComponents(code, provider)).toThrow(
+  it("produces no metadata when all marker types are disabled", () => {
+    const registry = createInjectionRegistry({
+      injectFileName: false,
+      injectSourceLine: false,
+    });
+    expect(
+      discoverComponents(
+        `import type { InjectFileName } from 'ts-source-reflection'; export const P = (p: InjectFileName<{}>) => null;`,
+        provider,
+        registry,
+      ),
+    ).toEqual([]);
+  });
+
+  it("enables source-line injection independently", () => {
+    const lineOnly = createInjectionRegistry({
+      injectFileName: false,
+      injectSourceLine: true,
+    });
+    const metadata = discoverComponents(
+      `import type { InjectFileName, InjectSourceLine } from 'ts-source-reflection'; export const P = (p: InjectFileName<InjectSourceLine<{}>>) => null;`,
+      provider,
+      lineOnly,
+    );
+    expect(metadata[0]?.callable?.targets[0]?.injections).toEqual([
+      { property: "_inj_sourceLine", source: "importer-source-line" },
+    ]);
+  });
+
+  it("rejects malformed and duplicate markers with code frames", () => {
+    const malformed = `import type { InjectSourceLine } from 'ts-source-reflection';\nexport const Bad = (props: InjectSourceLine) => null;`;
+    expect(() => discoverComponents(malformed, provider, both)).toThrow(
       /exactly one type argument/,
     );
-    expect(() => discoverComponents(code, provider)).toThrow(
-      /Provider\.tsx:3:/,
+    expect(() => discoverComponents(malformed, provider, both)).toThrow(
+      /Provider\.tsx:2:/,
+    );
+    const duplicate = `import type { InjectFileName } from 'ts-source-reflection';\nexport const Bad = (props: InjectFileName<InjectFileName<{}>>) => null;`;
+    expect(() => discoverComponents(duplicate, provider, both)).toThrow(
+      /Duplicate injection marker/,
     );
   });
 });
 
-describe("named import parsing", () => {
-  it("follows aliases and ignores type-only specifiers", () => {
-    const imports = findNamedImports(
-      `import { Provider as Local, type Props } from './Provider'; <Local />;`,
-      "/src/View.tsx",
-    );
-    expect(imports).toEqual([
+describe("consumer analysis", () => {
+  it("follows aliases while ignoring type-only imports and uses", () => {
+    expect(
+      findNamedImports(
+        `import { Provider as Local, type Props } from './Provider'; import { InjectFileName } from 'ts-source-reflection'; type P = InjectFileName<{}>; <Local />;`,
+        "/src/View.tsx",
+      ),
+    ).toEqual([
       {
         source: "./Provider",
         specifiers: [{ exportName: "Provider", localName: "Local" }],
       },
     ]);
   });
-
-  it("ignores regular imports that are used exclusively as types", () => {
-    const imports = findNamedImports(
-      `
-        import { WithFileName } from 'ts-source-reflection';
-        type Props = WithFileName<{ value: string }>;
-      `,
-      "/src/Provider.tsx",
-    );
-    expect(imports).toEqual([]);
-  });
 });
 
-describe("consumer filenames", () => {
+describe("source values and filtering", () => {
   it.each([
     ["/src/pages/RepositoryPage.tsx", "RepositoryPage"],
     ["/src/pages/RepositoryPage.test.tsx?import#hash", "RepositoryPage.test"],
     ["C:\\src\\pages\\index.tsx", "index"],
     ["\0virtual:module", null],
-    ["/src/extensionless", null],
-  ])("derives %s as %s", (id, expected) => {
+  ])("derives filename %s as %s", (id, expected) => {
     expect(deriveConsumerFileName(id)).toBe(expected);
+  });
+
+  it("derives a portable root-relative source path", () => {
+    expect(
+      deriveConsumerSourcePath(
+        "C:/repo/frontend",
+        "C:/repo/frontend/src/pages/View.tsx?import",
+      ),
+    ).toBe("src/pages/View.tsx");
+  });
+
+  it("applies includes and exclusions to absolute IDs", () => {
+    const filter = createSourceFilter("C:/repo/frontend", {
+      include: ["src/**/*.tsx"],
+      exclude: ["**/services/**"],
+    });
+    expect(filter("C:/repo/frontend/src/pages/View.tsx")).toBe(true);
+    expect(filter("C:/repo/frontend/src/services/Api.tsx")).toBe(false);
+    expect(filter("C:/repo/frontend/src/types.ts")).toBe(false);
   });
 });
 
-describe("source filtering", () => {
-  it("applies user exclusions to absolute transform IDs", () => {
-    const filter = createSourceFilter("C:/repo/frontend", {
-      exclude: ["**/services/api/api-client.types.ts"],
-    });
-    expect(filter("C:/repo/frontend/src/pages/View.tsx")).toBe(true);
-    expect(
-      filter("C:/repo/frontend/src/services/api/api-client.types.ts"),
-    ).toBe(false);
-  });
-
-  it("applies custom includes and default exclusions consistently", () => {
-    const filter = createSourceFilter("C:/repo", { include: ["src/**/*.tsx"] });
-    expect(filter("C:/repo/src/View.tsx")).toBe(true);
-    expect(filter("C:/repo/src/types.ts")).toBe(false);
-    expect(filter("C:/repo/src/generated.d.ts")).toBe(false);
+describe("plugin options", () => {
+  it("does not parse transforms when no injection type is enabled", async () => {
+    const plugin = sourceAwareInjectionPlugin();
+    expect(typeof plugin.transform).toBe("function");
+    if (typeof plugin.transform !== "function") return;
+    await expect(
+      Reflect.apply(plugin.transform, {}, [
+        "not valid TypeScript }}}",
+        "/src/Bad.ts",
+      ]),
+    ).resolves.toBeNull();
   });
 });
 
 describe("consumer transformation", () => {
-  const component = {
-    localName: "Local",
-    exportName: "Provider",
-    providerModuleId: provider,
-  };
-
-  const transform = (
+  function transform(
     code: string,
+    metadata = discoverComponents(
+      `import type { InjectFileName, InjectSourceLine } from 'ts-source-reflection'; export const Provider = (p: InjectFileName<InjectSourceLine<{}>>) => null;`,
+      provider,
+      both,
+    )[0]!,
     explicitProperty: "preserve" | "error" = "preserve",
-    id = "/src/pages/RepositoryPage.test.tsx?import",
-  ) =>
-    transformConsumer({
+  ) {
+    const parsed = analyzeConsumer(
       code,
-      id,
-      fileName: "RepositoryPage.test",
-      components: [component],
+      "/repo/src/pages/TestCaseView.tsx?import",
+    );
+    const specifier = parsed.imports[0]!.specifiers[0]!;
+    const usage: ResolvedExportUsage = {
+      ...specifier,
+      providerModuleId: provider,
+      metadata,
+    };
+    return transformConsumer({
+      parsed,
+      usages: [usage],
+      registry: both,
+      consumerFileName: "TestCaseView",
+      consumerSourcePath: "src/pages/TestCaseView.tsx",
       explicitProperty,
     });
+  }
 
-  it("injects aliases into nested and self-closing JSX and emits a source map", () => {
-    const result = transform(`
-      import { Provider as Local } from './Provider';
-      export const View = () => <><Local><Local /></Local></>;
-    `);
+  it("injects every requested value at each JSX call site in one AST", () => {
+    const result = transform(
+      `import { Provider as Local } from './Provider';\nexport const View = () => (\n  <><Local />\n    <Local></Local></>\n);`,
+    );
     expect(
-      result?.code.match(/_inj_sourceFileName="RepositoryPage\.test"/g),
+      result?.code.match(/_inj_sourceFileName="TestCaseView"/g),
     ).toHaveLength(2);
+    expect(result?.code).toContain(
+      '_inj_sourceLine="src/pages/TestCaseView.tsx:3"',
+    );
+    expect(result?.code).toContain(
+      '_inj_sourceLine="src/pages/TestCaseView.tsx:4"',
+    );
     expect(result?.map?.sources).toContain(
-      "/src/pages/RepositoryPage.test.tsx?import",
+      "/repo/src/pages/TestCaseView.tsx?import",
     );
   });
 
-  it("preserves an explicit property", () => {
-    const result = transform(`
-      import { Provider as Local } from './Provider';
-      export const View = () => <Local _inj_sourceFileName="logical-name" />;
-    `);
-    expect(result).toBeNull();
+  it("preserves each explicit property independently", () => {
+    const result = transform(
+      `import { Provider as Local } from './Provider';\n<Local _inj_sourceFileName="logical" />;`,
+    );
+    expect(result?.code).toContain('_inj_sourceFileName="logical"');
+    expect(result?.code).toContain(
+      '_inj_sourceLine="src/pages/TestCaseView.tsx:2"',
+    );
   });
 
-  it("errors on explicit properties when configured", () => {
+  it("errors for explicit properties under error policy", () => {
     expect(() =>
       transform(
-        `import { Provider as Local } from './Provider'; <Local _inj_sourceFileName="x" />;`,
+        `import { Provider as Local } from './Provider'; <Local _inj_sourceLine="x" />;`,
+        undefined,
         "error",
       ),
-    ).toThrow(/Explicit _inj_sourceFileName/);
+    ).toThrow(/Explicit _inj_sourceLine/);
   });
 
-  it("rejects spreads and unsupported value references", () => {
+  it("rejects spreads and unsupported references", () => {
     expect(() =>
       transform(
         `import { Provider as Local } from './Provider'; <Local {...props} />;`,
@@ -170,16 +248,140 @@ describe("consumer transformation", () => {
       ),
     ).toThrow(SourceAwareCompilerError);
   });
+});
 
-  it("leaves unrelated code untouched", () => {
+describe("function injection discovery", () => {
+  it("records marked parameters at any position and returned functions", () => {
+    const metadata = discoverComponents(
+      `
+        import type { InjectFileName, InjectSourceLine } from 'ts-source-reflection';
+        export async function direct(first: string, props: InjectSourceLine<{}>) {}
+        export function factory(defaults: {}) {
+          const showToast = async (props: InjectFileName<InjectSourceLine<{}>>) => {};
+          return { showToast };
+        }
+      `,
+      provider,
+      both,
+    );
+    expect(metadata[0]?.callable?.targets[0]?.parameterIndex).toBe(1);
+    expect(metadata[1]?.returnedMembers?.[0]?.memberName).toBe("showToast");
     expect(
-      transformConsumer({
-        code: `export const View = () => <div />`,
-        id: "/src/View.tsx",
-        fileName: "View",
-        components: [],
-        explicitProperty: "preserve",
-      }),
-    ).toBeNull();
+      metadata[1]?.returnedMembers?.[0]?.callable.targets[0]?.injections,
+    ).toHaveLength(2);
+  });
+
+  it.each([
+    ["optional", "props?: InjectSourceLine<{}>"],
+    ["defaulted", "props: InjectSourceLine<{}> = {}"],
+    ["rest", "...props: InjectSourceLine<{}>"],
+  ])("rejects %s injected parameters", (_kind, parameter) => {
+    expect(() =>
+      discoverComponents(
+        `import type { InjectSourceLine } from 'ts-source-reflection'; export function bad(${parameter}) {}`,
+        provider,
+        both,
+      ),
+    ).toThrow(/cannot be/);
+  });
+
+  it("rejects conditional factory return shapes", () => {
+    expect(() =>
+      discoverComponents(
+        `import type { InjectSourceLine } from 'ts-source-reflection'; export function factory(ok: boolean) { const run = (p: InjectSourceLine<{}>) => {}; if (ok) return { run }; return { run }; }`,
+        provider,
+        both,
+      ),
+    ).toThrow(/one direct unconditional object return/);
+  });
+});
+
+describe("ordinary and factory-returned call transformation", () => {
+  const transformCalls = (providerCode: string, consumerCode: string) => {
+    const metadata = discoverComponents(providerCode, provider, both)[0]!;
+    const parsed = analyzeConsumer(consumerCode, "/repo/src/Caller.ts");
+    const specifier = parsed.imports[0]!.specifiers[0]!;
+    const usage: ResolvedExportUsage = {
+      ...specifier,
+      providerModuleId: provider,
+      metadata,
+    };
+    return transformConsumer({
+      parsed,
+      usages: [usage],
+      registry: both,
+      consumerFileName: "Caller",
+      consumerSourcePath: "src/Caller.ts",
+      explicitProperty: "preserve",
+    });
+  };
+
+  it("injects required object literals at arbitrary parameter positions", () => {
+    const result = transformCalls(
+      `import type { InjectSourceLine } from 'ts-source-reflection'; export async function run(first: string, count: number, props: InjectSourceLine<{ doThing?: () => void }>) {}`,
+      `import { run as execute } from './Provider';\nexecute("first", 2, { doThing() {} });`,
+    );
+    expect(result?.code).toContain('_inj_sourceLine: "src/Caller.ts:2"');
+  });
+
+  it("injects destructured, renamed, stored-member, and chained factory calls", () => {
+    const result = transformCalls(
+      `import type { InjectSourceLine } from 'ts-source-reflection'; export function useToast(defaults: {}) { const showToast = (props: InjectSourceLine<{}>) => {}; return { showToast }; }`,
+      `import { useToast } from './Provider';
+const { showToast } = useToast({});
+showToast({});
+const { showToast: notify } = useToast({});
+notify({});
+const toast = useToast({});
+toast.showToast({});
+useToast({}).showToast({});`,
+    );
+    expect(
+      result?.code.match(/_inj_sourceLine: "src\/Caller\.ts:/g),
+    ).toHaveLength(4);
+    expect(result?.code).toContain('_inj_sourceLine: "src/Caller.ts:3"');
+    expect(result?.code).toContain('_inj_sourceLine: "src/Caller.ts:5"');
+    expect(result?.code).toContain('_inj_sourceLine: "src/Caller.ts:7"');
+    expect(result?.code).toContain('_inj_sourceLine: "src/Caller.ts:8"');
+  });
+
+  it("injects both factory arguments and returned calls", () => {
+    const result = transformCalls(
+      `import type { InjectFileName, InjectSourceLine } from 'ts-source-reflection'; export function make(options: InjectFileName<{}>) { return { run: (props: InjectSourceLine<{}>) => {} }; }`,
+      `import { make } from './Provider';\nmake({}).run({});`,
+    );
+    expect(result?.code).toContain('_inj_sourceFileName: "Caller"');
+    expect(result?.code).toContain('_inj_sourceLine: "src/Caller.ts:2"');
+  });
+
+  it.each([
+    ["missing", `run()`],
+    ["variable", `run(props)`],
+    ["spread", `run({ ...props })`],
+  ])("rejects %s injected call arguments", (_kind, call) => {
+    expect(() =>
+      transformCalls(
+        `import type { InjectSourceLine } from 'ts-source-reflection'; export function run(props: InjectSourceLine<{}>) {}`,
+        `import { run } from './Provider'; const props = {}; ${call};`,
+      ),
+    ).toThrow();
+  });
+
+  it("rejects extraction of an injected returned member", () => {
+    expect(() =>
+      transformCalls(
+        `import type { InjectSourceLine } from 'ts-source-reflection'; export function make() { return { run: (props: InjectSourceLine<{}>) => {} }; }`,
+        `import { make } from './Provider'; const result = make(); const run = result.run; run({});`,
+      ),
+    ).toThrow(/returned function|Factory result/);
+  });
+
+  it("rejects computed returned-member calls", () => {
+    expect(() =>
+      transformCalls(
+        `import type { InjectSourceLine } from 'ts-source-reflection'; export function make() { return { run: (props: InjectSourceLine<{}>) => {} }; }`,
+        `import { make } from './Provider'; make()["run"]({});`,
+      ),
+    ).toThrow(/Factory result/);
   });
 });
