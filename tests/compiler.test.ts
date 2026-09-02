@@ -412,6 +412,21 @@ useToast({}).showToast({});`,
     expect(result?.code).toContain('_inj_sourceLine: "src/Caller.ts:8"');
   });
 
+  it("injects destructured factory members declared inside a function scope", () => {
+    const result = transformCalls(
+      `import type { InjectSourceLine } from 'ts-source-reflection'; export function useToast(defaults: {}) { const showToast = (props: InjectSourceLine<{}>) => {}; return { showToast }; }`,
+      `import { useToast } from './Provider';
+export function FloatingLinkEditor() {
+  const { showToast } = useToast({});
+  const submitLink = () => {
+    showToast({ content: "invalid_link" });
+  };
+  return submitLink;
+}`,
+    );
+    expect(result?.code).toContain('_inj_sourceLine: "src/Caller.ts:5"');
+  });
+
   it("injects both factory arguments and returned calls", () => {
     const result = transformCalls(
       `import type { InjectFileName, InjectSourceLine } from 'ts-source-reflection'; export function make(options: InjectFileName<{}>) { return { run: (props: InjectSourceLine<{}>) => {} }; }`,

@@ -12,6 +12,11 @@ import {
   type ResolvedExportUsage,
   type SourceAwareExportMetadata,
 } from "./compiler";
+import {
+  formatVerificationResult,
+  verifyProject,
+  type VerificationResult,
+} from "./verifier";
 
 export interface SourceAwareInjectionPluginOptions {
   include?: string[];
@@ -25,6 +30,15 @@ export interface SourceAwareInjectionPluginOptions {
 interface ProviderCacheEntry {
   version: number;
   signature: string;
+}
+
+export interface SourceAwarePluginApi {
+  readonly kind: "ts-source-reflection";
+  readonly version: 1;
+  readonly enabled: boolean;
+  verify(
+    resolve: (source: string, importer: string) => Promise<string | null>,
+  ): Promise<VerificationResult>;
 }
 
 const DEFAULT_INCLUDE = ["**/*.ts", "**/*.tsx"];
@@ -83,7 +97,7 @@ function metadataSignature(metadata: SourceAwareExportMetadata[]): string {
 
 export function sourceAwareInjectionPlugin(
   options: SourceAwareInjectionPluginOptions = {},
-): Plugin {
+): Plugin & { api: SourceAwarePluginApi } {
   const explicitProperty = options.explicitProperty ?? "preserve";
   const registry = createInjectionRegistry({
     injectFileName: options.injectFileName ?? false,
@@ -98,6 +112,22 @@ export function sourceAwareInjectionPlugin(
   const importResolutionCache = new Map<string, Map<string, string | null>>();
   let config: ResolvedConfig;
   let isIncluded: (id: string) => boolean = () => true;
+
+  const runVerification = async (
+    resolve: (source: string, importer: string) => Promise<string | null>,
+  ) => {
+    const result = await verifyProject({
+      root: config.root,
+      registry,
+      explicitProperty,
+      isIncluded,
+      resolve,
+    });
+    metadata.clear();
+    for (const [moduleId, exports] of result.manifest)
+      metadata.set(moduleId, exports);
+    return result;
+  };
 
   const removeConsumerEdges = (consumerId: string) => {
     for (const providerId of consumerProviders.get(consumerId) ?? []) {
@@ -160,12 +190,28 @@ export function sourceAwareInjectionPlugin(
   return {
     name: "ts-source-reflection:source-aware-injection",
     enforce: "pre",
+    api: {
+      kind: "ts-source-reflection",
+      version: 1,
+      enabled: hasEnabledInjections,
+      verify: runVerification,
+    },
     configResolved(resolved) {
       config = resolved;
       isIncluded = createSourceFilter(config.root, options);
     },
     async buildStart() {
       if (!hasEnabledInjections) return;
+      if (config.command === "build") {
+        const result = await runVerification(async (source, importer) => {
+          const resolved = await this.resolve(source, importer, {
+            skipSelf: true,
+          });
+          return resolved?.id ?? null;
+        });
+        if (!result.ok) this.error(formatVerificationResult(result));
+        return;
+      }
       const files = await fg(options.include ?? DEFAULT_INCLUDE, {
         cwd: config.root,
         absolute: true,
@@ -212,7 +258,18 @@ export function sourceAwareInjectionPlugin(
           resolutionForConsumer.set(source, providerId);
         }
         if (!providerId) continue;
-        const exports = metadata.get(providerId);
+        let exports = metadata.get(providerId);
+        if (!exports) {
+          try {
+            const realProviderId = normalizePath(
+              await fs.realpath(cleanId(providerId)),
+            );
+            exports = metadata.get(realProviderId);
+            if (exports) providerId = realProviderId;
+          } catch {
+            // Resolution diagnostics are handled by Vite or whole-project verification.
+          }
+        }
         if (!exports?.size) continue;
         for (const specifier of imported.specifiers) {
           const exportMetadata = exports.get(specifier.exportName);

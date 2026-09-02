@@ -143,6 +143,22 @@ Patterns resolve from the Vite project root. Explicit injected props win by
 default. JSX spreads on marked components are rejected because precedence is
 ambiguous.
 
+## Whole-project verification
+
+Run the verifier locally or in CI using the same options and aliases as the
+resolved Vite configuration:
+
+```sh
+ts-source-reflection check
+ts-source-reflection check --config vite.config.ts --format json
+```
+
+Production Vite builds run this verification automatically. It checks source
+files outside the build entry graph and reports unsupported references, barrel
+re-exports, and injection-aware declarations or imports in project files filtered
+out by the plugin configuration. Dependencies, build output, and declaration
+files are not audited.
+
 ## Current boundaries
 
 The plugin supports named exported functions and arrow functions, direct named

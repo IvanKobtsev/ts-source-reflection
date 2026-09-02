@@ -133,6 +133,12 @@ export interface NamedImport {
 }
 
 export class SourceAwareCompilerError extends Error {
+  readonly reason: string;
+  readonly file: string;
+  readonly line?: number;
+  readonly column?: number;
+  readonly frame: string;
+
   constructor(
     reason: string,
     code: string,
@@ -154,6 +160,11 @@ export class SourceAwareCompilerError extends Error {
     super(
       [`${where} - ${reason}`, ...details, frame].filter(Boolean).join("\n"),
     );
+    this.reason = reason;
+    this.file = file;
+    this.line = location?.line;
+    this.column = location ? location.column + 1 : undefined;
+    this.frame = frame;
     this.name = "SourceAwareCompilerError";
   }
 }
@@ -489,11 +500,11 @@ function memberName(
 }
 
 function classifyMemberBinding(
-  programPath: NodePath<t.Program>,
+  declarationPath: NodePath,
   localName: string,
 ): Map<string, MemberCallAnalysis> {
   const members = new Map<string, MemberCallAnalysis>();
-  const binding = programPath.scope.getBinding(localName);
+  const binding = declarationPath.scope.getBinding(localName);
   const add = (name: string, call?: t.CallExpression, unsupported?: t.Node) => {
     const analysis = members.get(name) ?? { calls: [] };
     if (call) analysis.calls.push(call);
@@ -525,7 +536,6 @@ function classifyMemberBinding(
 
 function analyzeFactoryCall(
   callPath: NodePath<t.CallExpression>,
-  programPath: NodePath<t.Program>,
 ): FactoryCallAnalysis {
   const analysis: FactoryCallAnalysis = {
     call: callPath.node,
@@ -535,10 +545,7 @@ function analyzeFactoryCall(
   const parent = current.parentPath;
   if (parent?.isVariableDeclarator() && parent.node.init === current.node) {
     if (t.isIdentifier(parent.node.id))
-      analysis.members = classifyMemberBinding(
-        programPath,
-        parent.node.id.name,
-      );
+      analysis.members = classifyMemberBinding(parent, parent.node.id.name);
     else if (t.isObjectPattern(parent.node.id)) {
       for (const property of parent.node.id.properties) {
         if (t.isRestElement(property) || !t.isObjectProperty(property)) {
@@ -550,7 +557,7 @@ function analyzeFactoryCall(
           analysis.unsupportedResult ??= property;
           continue;
         }
-        const binding = programPath.scope.getBinding(property.value.name);
+        const binding = parent.scope.getBinding(property.value.name);
         const member: MemberCallAnalysis = {
           calls: [],
           unsupportedReference: binding?.constantViolations[0]?.node,
@@ -620,7 +627,7 @@ export function analyzeConsumer(code: string, id: string): ParsedConsumer {
             const call = directCallForReference(reference);
             if (call) {
               directCalls.push(call.node);
-              factoryCalls.push(analyzeFactoryCall(call, programPath));
+              factoryCalls.push(analyzeFactoryCall(call));
               continue;
             }
             unsupportedReference ??= reference.node;
@@ -652,6 +659,32 @@ export function findNamedImports(code: string, id: string): NamedImport[] {
       localName,
     })),
   }));
+}
+
+export function findSameModuleExportReferences(
+  code: string,
+  id: string,
+  exportNames: ReadonlySet<string>,
+): Array<{ exportName: string; node: t.Node }> {
+  if (exportNames.size === 0) return [];
+  const ast = parseModule(code, id);
+  const references: Array<{ exportName: string; node: t.Node }> = [];
+  traverse(ast, {
+    Program(programPath) {
+      for (const exportName of exportNames) {
+        const binding = programPath.scope.getBinding(exportName);
+        for (const reference of binding?.referencePaths ?? []) {
+          if (
+            reference.isIdentifier({ name: exportName }) &&
+            reference.node !== binding?.identifier &&
+            !isTypeReference(reference)
+          )
+            references.push({ exportName, node: reference.node });
+        }
+      }
+    },
+  });
+  return references;
 }
 
 function unwrapObjectArgument(

@@ -1,12 +1,15 @@
 {
   "name": "ts-source-reflection",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Compile-time TypeScript source reflection for Vite",
   "license": "MIT",
   "type": "module",
   "main": "./dist/index.cjs",
   "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "ts-source-reflection": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",

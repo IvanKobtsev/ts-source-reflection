@@ -80,4 +80,40 @@ describe("Vite integration", () => {
     expect(chunk?.code ?? "").toContain("RepositoryPage.test.tsx:7");
     expect(chunk?.code ?? "").toMatch(/inj_[0-9a-f]{32}/);
   });
+
+  it("fails production verification for injection imports in excluded files", async () => {
+    const root = await fs.mkdtemp(
+      path.join(os.tmpdir(), "ts-source-reflection-excluded-"),
+    );
+    temporaryDirectories.push(root);
+    await fs.mkdir(path.join(root, "excluded"));
+    await fs.writeFile(
+      path.join(root, "Provider.ts"),
+      `import type { InjectSourceLine } from "ts-source-reflection";
+       export function run(props: InjectSourceLine<{}>) {}`,
+    );
+    await fs.writeFile(path.join(root, "entry.ts"), `export const value = 1;`);
+    await fs.writeFile(
+      path.join(root, "excluded", "Consumer.ts"),
+      `import { run } from "../Provider";`,
+    );
+
+    await expect(
+      build({
+        root,
+        logLevel: "silent",
+        plugins: [
+          sourceAwareInjectionPlugin({
+            injectSourceLine: true,
+            exclude: ["**/excluded/**"],
+          }),
+        ],
+        build: {
+          write: false,
+          lib: { entry: path.join(root, "entry.ts"), formats: ["es"] },
+          rollupOptions: { external: ["ts-source-reflection"] },
+        },
+      }),
+    ).rejects.toThrow(/excluded-injection-import/);
+  });
 });

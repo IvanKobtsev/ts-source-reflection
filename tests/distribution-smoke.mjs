@@ -1,12 +1,17 @@
 import { promises as fs } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+import { pathToFileURL } from "node:url";
+import process from "node:process";
 import { build } from "vite";
 import { sourceAwareInjectionPlugin } from "../dist/index.js";
 
 const root = await fs.mkdtemp(
   path.join(os.tmpdir(), "ts-source-reflection-dist-"),
 );
+const execFileAsync = promisify(execFile);
 
 try {
   await fs.writeFile(
@@ -82,6 +87,24 @@ try {
   }
   if (code.includes("node:crypto") || code.includes("createHash")) {
     throw new Error("Application output contains build-time hashing code");
+  }
+
+  const packageRoot = process.cwd();
+  const pluginUrl = pathToFileURL(path.join(packageRoot, "dist/index.js")).href;
+  await fs.writeFile(
+    path.join(root, "vite.config.mjs"),
+    `import { sourceAwareInjectionPlugin } from ${JSON.stringify(pluginUrl)};
+     export default { plugins: [sourceAwareInjectionPlugin({ injectSourceLine: true })] };`,
+  );
+  const cli = path.join(packageRoot, "dist/cli.js");
+  const { stdout } = await execFileAsync(process.execPath, [
+    cli,
+    "check",
+    "--root",
+    root,
+  ]);
+  if (!stdout.includes("All injection-aware usages are transformable")) {
+    throw new Error("Published CLI did not verify the fixture project");
   }
 } finally {
   await fs.rm(root, { recursive: true, force: true });
